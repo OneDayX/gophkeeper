@@ -59,6 +59,11 @@ func New(opts Options) (*Client, error) {
 
 	conn, err := grpc.NewClient(opts.Address,
 		grpc.WithTransportCredentials(creds),
+		// Without it, resolving a host name also makes a DNS TXT query for a
+		// gRPC service config, which GophKeeper does not use; a slow DNS
+		// server, such as the one of WSL, then delays every command by its
+		// 5-second timeout.
+		grpc.WithDisableServiceConfig(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxMessageSize),
 			grpc.MaxCallSendMsgSize(maxMessageSize),

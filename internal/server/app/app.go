@@ -137,6 +137,9 @@ func (a *App) initGateway(ctx context.Context, cfg config.Config, tlsConfig *tls
 
 	conn, err := grpc.NewClient(gatewayTarget(a.grpcLis),
 		grpc.WithTransportCredentials(creds),
+		// No DNS TXT query for a service config, which the target localhost
+		// would otherwise make; see remote.New in the client.
+		grpc.WithDisableServiceConfig(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(grpcserver.MaxMessageSize),
 			grpc.MaxCallSendMsgSize(grpcserver.MaxMessageSize),
