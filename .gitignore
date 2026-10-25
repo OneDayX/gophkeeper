@@ -1,0 +1,25 @@
+# Binaries, release builds and protoc plugins
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Coverage profiles
+coverage.out
+coverage.out.all
+
+# TLS keys and certificates from `make certs`
+/certs/
+
+# Dependency directories
+vendor/
+
+# IDEs directories
+.idea
+.vscode
