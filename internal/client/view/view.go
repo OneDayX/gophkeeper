@@ -108,7 +108,10 @@ func Sync(r vault.SyncResult) string {
 	}
 
 	text := fmt.Sprintf("Synced: %d received, %d sent.", r.Pulled, r.Pushed)
-	if r.Conflicts > 0 {
+	switch {
+	case r.Conflicts == 1:
+		text += " 1 entry was changed on another device too; your version is kept as a copy marked \"conflict\"."
+	case r.Conflicts > 1:
 		text += fmt.Sprintf(" %d entries were changed on another device too; your versions are kept as copies marked \"conflict\".", r.Conflicts)
 	}
 

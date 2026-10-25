@@ -93,5 +93,6 @@ func TestRemaining(t *testing.T) {
 func TestSync(t *testing.T) {
 	assert.Equal(t, "Synced, everything is up to date.", Sync(vault.SyncResult{}))
 	assert.Equal(t, "Synced: 2 received, 1 sent.", Sync(vault.SyncResult{Pulled: 2, Pushed: 1}))
-	assert.Contains(t, Sync(vault.SyncResult{Pulled: 1, Conflicts: 1}), "kept as copies")
+	assert.Contains(t, Sync(vault.SyncResult{Pulled: 1, Conflicts: 1}), "1 entry was changed on another device too; your version is kept as a copy")
+	assert.Contains(t, Sync(vault.SyncResult{Pulled: 2, Conflicts: 2}), "2 entries were changed on another device too; your versions are kept as copies")
 }
