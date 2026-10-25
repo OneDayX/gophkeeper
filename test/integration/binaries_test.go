@@ -124,7 +124,7 @@ func (c client) run(t *testing.T, stdin string, args ...string) (string, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, c.bin, append([]string{"--server", c.server, "--insecure", "--data-dir", c.dataDir}, args...)...)
+	cmd := exec.CommandContext(ctx, c.bin, append([]string{"--server", c.server, "--data-dir", c.dataDir}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 

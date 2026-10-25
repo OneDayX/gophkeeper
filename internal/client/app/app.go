@@ -43,7 +43,8 @@ type Config struct {
 	// CACert is the PEM file of the CA of the server certificate; empty
 	// means the CAs the system trusts.
 	CACert string
-	// Insecure turns TLS off, for a development server on localhost.
+	// Insecure turns TLS off for a server on another machine too; a server
+	// on this machine is reached without TLS anyway.
 	Insecure bool
 }
 

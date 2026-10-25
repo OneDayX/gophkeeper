@@ -80,7 +80,7 @@ func login(t *testing.T, s server, user string, register bool) *device {
 	t.Helper()
 	ctx := context.Background()
 
-	a, err := app.New(app.Config{DataDir: t.TempDir(), Server: s.grpcAddr, Insecure: true})
+	a, err := app.New(app.Config{DataDir: t.TempDir(), Server: s.grpcAddr})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = a.Close() })
 
@@ -205,7 +205,7 @@ func TestWrongPassword(t *testing.T) {
 	s := startServer(t)
 	login(t, s, "alice", true)
 
-	a, err := app.New(app.Config{DataDir: t.TempDir(), Server: s.grpcAddr, Insecure: true})
+	a, err := app.New(app.Config{DataDir: t.TempDir(), Server: s.grpcAddr})
 	require.NoError(t, err)
 	defer a.Close()
 
@@ -375,7 +375,7 @@ func TestOfflineChangesReachServer(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	a, err := app.New(app.Config{DataDir: dataDir, Server: network.addr(), Insecure: true})
+	a, err := app.New(app.Config{DataDir: dataDir, Server: network.addr()})
 	require.NoError(t, err)
 	require.NoError(t, a.Register(ctx, "alice", masterPassword))
 	require.NoError(t, a.Close())

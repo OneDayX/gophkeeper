@@ -22,7 +22,7 @@ type Session struct {
 	// CACert is the PEM file of the CA the server certificate is checked
 	// against; empty means the system roots.
 	CACert string `json:"ca_cert,omitempty"`
-	// Insecure turns TLS off, for a development server on localhost.
+	// Insecure turns TLS off for a server on another machine too.
 	Insecure bool `json:"insecure,omitempty"`
 	// Login is the login of the user.
 	Login string `json:"login"`

@@ -57,7 +57,8 @@ func startServer(t *testing.T, opts ...grpc.ServerOption) string {
 func newClient(t *testing.T, addr string) *Client {
 	t.Helper()
 
-	c, err := New(Options{Address: addr, Insecure: true})
+	// No Insecure: the server is on this machine, so no TLS by default.
+	c, err := New(Options{Address: addr})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 
@@ -192,12 +193,51 @@ func TestTLS(t *testing.T) {
 	_, err = c.Register(context.Background(), "alice", "auth-key")
 	require.NoError(t, err)
 
-	// The system CAs do not trust a self-signed certificate.
-	untrusting, err := New(Options{Address: addr})
+	// A CA that has not signed the certificate is not trusted.
+	otherCA, _ := writeTestCert(t)
+	untrusting, err := New(Options{Address: addr, CACert: otherCA})
 	require.NoError(t, err)
 	defer untrusting.Close()
 	_, err = untrusting.Login(context.Background(), "alice", "auth-key")
 	assert.ErrorIs(t, err, models.ErrUnavailable)
+
+	// Without a CA, a local server is reached without TLS, which a TLS
+	// server refuses: TLS on localhost needs the CA given.
+	plain, err := New(Options{Address: addr})
+	require.NoError(t, err)
+	defer plain.Close()
+	_, err = plain.Login(context.Background(), "alice", "auth-key")
+	assert.ErrorIs(t, err, models.ErrUnavailable)
+}
+
+func TestTransportCredentials(t *testing.T) {
+	caCert, _ := writeTestCert(t)
+
+	tests := []struct {
+		name string
+		opts Options
+		want string // the security protocol of the connection
+	}{
+		{"localhost", Options{Address: "localhost:3200"}, "insecure"},
+		{"localhost in capitals", Options{Address: "LOCALHOST:3200"}, "insecure"},
+		{"IPv4 loopback", Options{Address: "127.0.0.1:3200"}, "insecure"},
+		{"another IPv4 loopback", Options{Address: "127.0.1.1:3200"}, "insecure"},
+		{"IPv6 loopback", Options{Address: "[::1]:3200"}, "insecure"},
+		{"host without a port", Options{Address: "localhost"}, "insecure"},
+		{"remote host", Options{Address: "keeper.example.com:3200"}, "tls"},
+		{"LAN address", Options{Address: "192.168.1.10:3200"}, "tls"},
+		{"a name that only starts like localhost", Options{Address: "localhost.example.com:3200"}, "tls"},
+		{"localhost with a CA", Options{Address: "localhost:3200", CACert: caCert}, "tls"},
+		{"remote host made insecure", Options{Address: "keeper.example.com:3200", Insecure: true}, "insecure"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creds, err := transportCredentials(tt.opts)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, creds.Info().SecurityProtocol)
+		})
+	}
 }
 
 func TestNew_BadCA(t *testing.T) {

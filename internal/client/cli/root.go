@@ -100,7 +100,7 @@ Start with "gophkeeper register" or "gophkeeper login", or run
 	flags.StringVar(&c.cfg.CACert, "ca-cert", os.Getenv(envCACert),
 		"PEM file of the CA that signed the server certificate; env "+envCACert)
 	flags.BoolVar(&c.cfg.Insecure, "insecure", envBool(envInsecure),
-		"connect without TLS, for a development server only; env "+envInsecure)
+		"connect to a remote server without TLS, for debugging only (a server on this machine needs no TLS); env "+envInsecure)
 	flags.StringVar(&c.cfg.DataDir, "data-dir", envOr(envDataDir, defaultDataDir()),
 		"directory for the session and the local vault; env "+envDataDir)
 	flags.BoolVar(&c.offline, "offline", false,

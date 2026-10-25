@@ -67,7 +67,7 @@ func (d *device) run(t *testing.T, stdin string, args ...string) (string, string
 	t.Helper()
 
 	cmd := newRootCommand(testBuild, d.runTUI)
-	cmd.SetArgs(append([]string{"--server", d.server, "--insecure", "--data-dir", d.dataDir}, args...))
+	cmd.SetArgs(append([]string{"--server", d.server, "--data-dir", d.dataDir}, args...))
 	cmd.SetIn(strings.NewReader(stdin))
 
 	var stdout, stderr bytes.Buffer

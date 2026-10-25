@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/OneDayX/gophkeeper/internal/client/models"
@@ -28,14 +30,17 @@ import (
 // with room for the rest of the message.
 const maxMessageSize = 13 << 20 // 13 MiB
 
-// Options tell how to reach the server.
+// Options tell how to reach the server. A server on this machine is reached
+// without TLS unless CACert is set; any other one only over TLS unless
+// Insecure is set.
 type Options struct {
 	// Address is the host:port of the gRPC server.
 	Address string
 	// CACert is the PEM file of the CA that has signed the server
 	// certificate. Empty means the CAs the system trusts.
 	CACert string
-	// Insecure turns TLS off, for a development server on localhost.
+	// Insecure turns TLS off for a server on another machine too, for
+	// debugging.
 	Insecure bool
 }
 
@@ -81,9 +86,11 @@ func New(opts Options) (*Client, error) {
 }
 
 // transportCredentials returns TLS with the CA from the options or the
-// system ones, or no TLS at all if the options say so.
+// system ones. There is no TLS if the options say so, or if the server is on
+// this machine and no CA is given: the traffic never leaves the computer,
+// and a local server has no certificate a system CA would trust anyway.
 func transportCredentials(opts Options) (credentials.TransportCredentials, error) {
-	if opts.Insecure {
+	if opts.Insecure || (opts.CACert == "" && isLoopback(opts.Address)) {
 		return insecure.NewCredentials(), nil
 	}
 
@@ -102,6 +109,22 @@ func transportCredentials(opts Options) (credentials.TransportCredentials, error
 	}
 
 	return credentials.NewTLS(config), nil
+}
+
+// isLoopback reports whether the address points to this machine: localhost
+// or a loopback IP such as 127.0.0.1 or ::1.
+func isLoopback(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Close closes the connection.

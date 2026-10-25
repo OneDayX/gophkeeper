@@ -47,7 +47,7 @@ func startServer(t *testing.T) string {
 func newApp(t *testing.T, server string) *App {
 	t.Helper()
 
-	a, err := New(Config{DataDir: t.TempDir(), Server: server, Insecure: true})
+	a, err := New(Config{DataDir: t.TempDir(), Server: server})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = a.Close() })
 
@@ -102,7 +102,7 @@ func TestApp_SessionSurvivesRestart(t *testing.T) {
 	server := startServer(t)
 	ctx := context.Background()
 	dir := t.TempDir()
-	cfg := Config{DataDir: dir, Server: server, Insecure: true}
+	cfg := Config{DataDir: dir, Server: server}
 
 	first, err := New(cfg)
 	require.NoError(t, err)
