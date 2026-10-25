@@ -38,7 +38,10 @@ func buildBinaries(t *testing.T) (serverBin, clientBin string) {
 	}
 
 	for bin, pkg := range map[string]string{serverBin: "../../cmd/gophkeeper-server", clientBin: "../../cmd/gophkeeper"} {
-		cmd := exec.Command("go", "build",
+		// The test needs no git data in the binaries, and asking git for it
+		// fails where the checkout belongs to another user, as in CI
+		// containers.
+		cmd := exec.Command("go", "build", "-buildvcs=false",
 			"-ldflags", "-X main.buildVersion=v9.9.9 -X main.buildDate=2026-10-25",
 			"-o", bin, pkg)
 		out, err := cmd.CombinedOutput()

@@ -1,0 +1,9 @@
+# The image needs only the sources: no git history, local binaries,
+# coverage profiles or TLS keys from `make certs`.
+.git
+.github
+.claude
+bin
+dist
+certs
+coverage.out*

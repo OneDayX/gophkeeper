@@ -53,11 +53,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # -buildvcs=false: in the container the checkout belongs to another
+      # user, and git refuses to tell go build about it.
       - name: Build the client for Linux, macOS and Windows
         run: |
           for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-            CGO_ENABLED=0 GOOS=${platform%/*} GOARCH=${platform#*/} go build -o /dev/null ./cmd/gophkeeper
+            CGO_ENABLED=0 GOOS=${platform%/*} GOARCH=${platform#*/} go build -buildvcs=false -o /dev/null ./cmd/gophkeeper
           done
 
       - name: Build the server
-        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/gophkeeper-server
+        run: CGO_ENABLED=0 go build -buildvcs=false -o /dev/null ./cmd/gophkeeper-server
