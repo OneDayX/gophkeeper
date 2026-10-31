@@ -1,0 +1,313 @@
+syntax = "proto3";
+
+// The protocol between the GophKeeper client and server.
+//
+// gRPC is the main transport. The same services are also served as a REST
+// API by grpc-gateway, following the google.api.http annotations below; the
+// Swagger description of that API is generated from this file.
+package gophkeeper.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option go_package = "github.com/OneDayX/gophkeeper/internal/pb;pb";
+
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "GophKeeper API";
+    version: "1.0";
+    description: "GophKeeper keeps logins and passwords, texts, files, bank cards and OTP generators of its users.\n\nThe secrets are encrypted on the client with a key derived from the master password: the server stores opaque data and never sees the plaintext. Every change of an item gets a new version, which the clients use for incremental sync and for optimistic locking.\n\ngRPC is the main protocol; this REST API mirrors it one to one. Errors come as google.rpc.Status: 400 invalid argument, 401 bad credentials or token, 404 no such item, 409 login taken, item exists or version conflict.";
+  };
+  schemes: HTTP;
+  schemes: HTTPS;
+  consumes: "application/json";
+  produces: "application/json";
+  security_definitions: {
+    security: {
+      key: "Bearer";
+      value: {
+        type: TYPE_API_KEY;
+        in: IN_HEADER;
+        name: "Authorization";
+        description: "The token from register or login, as \"Bearer <token>\".";
+      }
+    }
+  };
+};
+
+// AuthService signs users up and in. Its methods are the only ones that
+// work without a token.
+service AuthService {
+  // Register creates an account
+  //
+  // Returns a token for the new account. Fails with ALREADY_EXISTS if the
+  // login is taken and with INVALID_ARGUMENT if the login or the password is
+  // empty or too long.
+  rpc Register(RegisterRequest) returns (RegisterResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/auth/register"
+      body: "*"
+    };
+  }
+
+  // Login signs a user in
+  //
+  // Returns a fresh token. Fails with UNAUTHENTICATED if the login is unknown
+  // or the password does not match; the two cases are not told apart.
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/auth/login"
+      body: "*"
+    };
+  }
+}
+
+// ItemService keeps the encrypted items of the signed-in user. Every call
+// needs the token in the "authorization" metadata (the Authorization header
+// in REST) as "Bearer <token>"; without a valid one it fails with
+// UNAUTHENTICATED.
+service ItemService {
+  // CreateItem stores a new item
+  //
+  // The client chooses the ID, so that an item created offline keeps it after
+  // the sync; if the ID is empty, the server generates one. Fails with
+  // ALREADY_EXISTS if the user already has an item with this ID, deleted ones
+  // included.
+  rpc CreateItem(CreateItemRequest) returns (CreateItemResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/items"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      security: {
+        security_requirement: {
+          key: "Bearer";
+          value: {};
+        }
+      }
+    };
+  }
+
+  // UpdateItem replaces the data of an item
+  //
+  // The version in the request must be the current version of the item:
+  // otherwise another client has changed it in the meantime, and the call
+  // fails with ABORTED. Fails with NOT_FOUND if there is no such item or it
+  // has been deleted.
+  rpc UpdateItem(UpdateItemRequest) returns (UpdateItemResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/items/{id}"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      security: {
+        security_requirement: {
+          key: "Bearer";
+          value: {};
+        }
+      }
+    };
+  }
+
+  // DeleteItem deletes an item
+  //
+  // The item turns into a tombstone without data, so that other clients learn
+  // about the deletion on their next sync. Like UpdateItem, it needs the
+  // current version and fails with ABORTED otherwise.
+  rpc DeleteItem(DeleteItemRequest) returns (DeleteItemResponse) {
+    option (google.api.http) = {
+      delete: "/api/v1/items/{id}"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      security: {
+        security_requirement: {
+          key: "Bearer";
+          value: {};
+        }
+      }
+    };
+  }
+
+  // GetItem returns one item
+  //
+  // Fails with NOT_FOUND if there is no such item or it has been deleted.
+  rpc GetItem(GetItemRequest) returns (GetItemResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/items/{id}"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      security: {
+        security_requirement: {
+          key: "Bearer";
+          value: {};
+        }
+      }
+    };
+  }
+
+  // ListItems streams the changes after a version
+  //
+  // Sends, one per message and ordered by version, every item whose version
+  // is greater than since_version, tombstones included. A client keeps the
+  // greatest version it has seen and passes it next time, so that it gets
+  // only the changes made since its last sync. Zero lists everything.
+  rpc ListItems(ListItemsRequest) returns (stream ListItemsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/items"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      security: {
+        security_requirement: {
+          key: "Bearer";
+          value: {};
+        }
+      }
+    };
+  }
+}
+
+// ItemType is the kind of secret an item holds. It is the only thing about
+// the content the server knows.
+enum ItemType {
+  // The type is not set; the server rejects such items.
+  ITEM_TYPE_UNSPECIFIED = 0;
+  // A login and password pair.
+  ITEM_TYPE_CREDENTIALS = 1;
+  // Arbitrary text.
+  ITEM_TYPE_TEXT = 2;
+  // Arbitrary binary data, such as a file.
+  ITEM_TYPE_BINARY = 3;
+  // Bank card details.
+  ITEM_TYPE_CARD = 4;
+  // A generator of time-based one-time passwords (TOTP).
+  ITEM_TYPE_OTP = 5;
+}
+
+// Item is a secret of a user as the server keeps it.
+message Item {
+  // ID is a UUID; the client that created the item has chosen it.
+  string id = 1;
+  // Type is the kind of the secret.
+  ItemType type = 2;
+  // Data is the secret encrypted on the client, together with its name and
+  // metadata. Empty for a deleted item.
+  bytes data = 3;
+  // Version is a number that grows with every change of any item of the
+  // user. It orders the changes for sync and guards updates.
+  int64 version = 4;
+  // Deleted marks a tombstone: the item has been deleted, and the clients
+  // should delete their copies.
+  bool deleted = 5;
+  // UpdatedAt is when the server stored the latest change.
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// RegisterRequest holds the credentials of a new account.
+message RegisterRequest {
+  // Login is unique across the users, up to 256 bytes.
+  string login = 1;
+  // Password is up to 72 bytes. The official client does not send the master
+  // password itself but a key derived from it, so the server never learns
+  // the password the data is encrypted with.
+  string password = 2;
+}
+
+// RegisterResponse holds the token of the new account.
+message RegisterResponse {
+  // Token authenticates the other calls.
+  string token = 1;
+}
+
+// LoginRequest holds the credentials of an existing account.
+message LoginRequest {
+  // Login is the login the account was registered with.
+  string login = 1;
+  // Password is the password of the account.
+  string password = 2;
+}
+
+// LoginResponse holds a fresh token.
+message LoginResponse {
+  // Token authenticates the other calls.
+  string token = 1;
+}
+
+// CreateItemRequest is a new item.
+message CreateItemRequest {
+  // ID is a UUID for the item. If empty, the server generates one.
+  string id = 1;
+  // Type is the kind of the secret.
+  ItemType type = 2;
+  // Data is the encrypted secret, not empty.
+  bytes data = 3;
+}
+
+// CreateItemResponse tells how the server stored the new item.
+message CreateItemResponse {
+  // ID is the ID of the item.
+  string id = 1;
+  // Version is the version of the item.
+  int64 version = 2;
+  // UpdatedAt is when the item was stored.
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+// UpdateItemRequest is new data for an item.
+message UpdateItemRequest {
+  // ID is the ID of the item.
+  string id = 1;
+  // Data is the new encrypted secret, not empty.
+  bytes data = 2;
+  // Version is the version the client has changed: it must still be the
+  // current one.
+  int64 version = 3;
+}
+
+// UpdateItemResponse tells the new version of the item.
+message UpdateItemResponse {
+  // Version is the new version of the item.
+  int64 version = 1;
+  // UpdatedAt is when the change was stored.
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+// DeleteItemRequest names the item to delete.
+message DeleteItemRequest {
+  // ID is the ID of the item.
+  string id = 1;
+  // Version is the version the client wants to delete: it must still be the
+  // current one.
+  int64 version = 2;
+}
+
+// DeleteItemResponse tells the version of the tombstone.
+message DeleteItemResponse {
+  // Version is the version of the tombstone.
+  int64 version = 1;
+}
+
+// GetItemRequest names the item to return.
+message GetItemRequest {
+  // ID is the ID of the item.
+  string id = 1;
+}
+
+// GetItemResponse holds the item.
+message GetItemResponse {
+  // Item is the requested item.
+  Item item = 1;
+}
+
+// ListItemsRequest tells which changes to list.
+message ListItemsRequest {
+  // SinceVersion is the greatest version the client already has; zero lists
+  // everything.
+  int64 since_version = 1;
+}
+
+// ListItemsResponse is one changed item of the stream.
+message ListItemsResponse {
+  // Item is a changed item or a tombstone.
+  Item item = 1;
+}

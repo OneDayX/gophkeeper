@@ -1,0 +1,65 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: golang:1.26
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gophkeeper
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_DSN: postgres://postgres:postgres@postgres:5432/gophkeeper?sslmode=disable
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Vet
+        run: go vet ./...
+
+      # Packages with database tests empty the same tables, so they run one
+      # by one.
+      - name: Test
+        run: go test -race -p 1 -coverprofile=coverage.out.all ./...
+
+      - name: Coverage of 70% or more, generated code aside
+        run: |
+          grep -v -E '\.pb(\.gw)?\.go:' coverage.out.all > coverage.out
+          go tool cover -func=coverage.out | tail -1
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{ sub("%", "", $3); print $3 }')
+          awk -v total="$total" 'BEGIN { if (total < 70) { print "coverage " total "% is below 70%"; exit 1 } }'
+
+  build:
+    runs-on: ubuntu-latest
+    container: golang:1.26
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -buildvcs=false: in the container the checkout belongs to another
+      # user, and git refuses to tell go build about it.
+      - name: Build the client for Linux, macOS and Windows
+        run: |
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            CGO_ENABLED=0 GOOS=${platform%/*} GOARCH=${platform#*/} go build -buildvcs=false -o /dev/null ./cmd/gophkeeper
+          done
+
+      - name: Build the server
+        run: CGO_ENABLED=0 go build -buildvcs=false -o /dev/null ./cmd/gophkeeper-server
