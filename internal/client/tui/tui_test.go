@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -515,11 +516,17 @@ func TestSaveFile(t *testing.T) {
 	m = press(t, m, "esc")
 	assert.False(t, m.saving)
 
+	require.NoError(t, os.WriteFile(path, []byte("old"), 0o644))
 	m = press(t, m, "w", "ctrl+u", path, "enter")
 	assert.Contains(t, m.status, "Saved to")
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "private key", string(data))
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 
 	m = press(t, m, "w", "ctrl+u", filepath.Join(t.TempDir(), "no", "such", "dir"), "enter")
 	assert.True(t, m.statusErr)

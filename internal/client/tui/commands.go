@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
@@ -108,6 +109,9 @@ func deleteCmd(v Vault, e vault.Entry) tea.Cmd {
 // writeFileCmd saves data to a file only its owner can read.
 func writeFileCmd(path string, data []byte) tea.Cmd {
 	return func() tea.Msg {
+		if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fileSavedMsg{path: path, err: err}
+		}
 		return fileSavedMsg{path: path, err: os.WriteFile(path, data, 0o600)}
 	}
 }

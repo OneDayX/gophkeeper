@@ -289,7 +289,10 @@ func saveBinary(cmd *cobra.Command, entry vault.Entry, path string) error {
 		return err
 	}
 
-	// The file holds a secret, so only its owner may read it.
+	// WriteFile keeps the permissions of an existing file, so tighten them too.
+	if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := os.WriteFile(path, binary.Data, 0o600); err != nil {
 		return err
 	}

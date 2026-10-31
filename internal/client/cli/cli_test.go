@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -219,12 +220,18 @@ func TestEntries(t *testing.T) {
 	_, _, err = d.run(t, "", "otp", "visa")
 	assert.Error(t, err, "not an OTP entry")
 
-	// A binary entry is saved to a file or to stdout.
+	// Saving over an existing file tightens its permissions too.
 	saved := filepath.Join(t.TempDir(), "restored")
+	require.NoError(t, os.WriteFile(saved, []byte("old"), 0o644))
 	d.must(t, "", "show", "ssh key", "--out", saved)
 	data, err := os.ReadFile(saved)
 	require.NoError(t, err)
 	assert.Equal(t, "private key", string(data))
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(saved)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 	assert.Equal(t, "private key", d.must(t, "", "show", "ssh key", "-o", "-"))
 	_, _, err = d.run(t, "", "show", "visa", "--out", saved)
 	assert.Error(t, err, "only binary entries go to files")
