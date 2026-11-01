@@ -1,0 +1,546 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "GophKeeper API",
+    "description": "GophKeeper keeps logins and passwords, texts, files, bank cards and OTP generators of its users.\n\nThe secrets are encrypted on the client with a key derived from the master password: the server stores opaque data and never sees the plaintext. Every change of an item gets a new version, which the clients use for incremental sync and for optimistic locking.\n\ngRPC is the main protocol; this REST API mirrors it one to one. Errors come as google.rpc.Status: 400 invalid argument, 401 bad credentials or token, 404 no such item, 409 login taken, item exists or version conflict.",
+    "version": "1.0"
+  },
+  "tags": [
+    {
+      "name": "AuthService",
+      "description": "AuthService signs users up and in. Its methods are the only ones that\nwork without a token."
+    },
+    {
+      "name": "ItemService",
+      "description": "ItemService keeps the encrypted items of the signed-in user. Every call\nneeds the token in the \"authorization\" metadata (the Authorization header\nin REST) as \"Bearer \u003ctoken\u003e\"; without a valid one it fails with\nUNAUTHENTICATED."
+    }
+  ],
+  "schemes": [
+    "http",
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "summary": "Login signs a user in",
+        "description": "Returns a fresh token. Fails with UNAUTHENTICATED if the login is unknown\nor the password does not match; the two cases are not told apart.",
+        "operationId": "AuthService_Login",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1LoginResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "LoginRequest holds the credentials of an existing account.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1LoginRequest"
+            }
+          }
+        ],
+        "tags": [
+          "AuthService"
+        ]
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "summary": "Register creates an account",
+        "description": "Returns a token for the new account. Fails with ALREADY_EXISTS if the\nlogin is taken and with INVALID_ARGUMENT if the login or the password is\nempty or too long.",
+        "operationId": "AuthService_Register",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1RegisterResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "RegisterRequest holds the credentials of a new account.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1RegisterRequest"
+            }
+          }
+        ],
+        "tags": [
+          "AuthService"
+        ]
+      }
+    },
+    "/api/v1/items": {
+      "get": {
+        "summary": "ListItems streams the changes after a version",
+        "description": "Sends, one per message and ordered by version, every item whose version\nis greater than since_version, tombstones included. A client keeps the\ngreatest version it has seen and passes it next time, so that it gets\nonly the changes made since its last sync. Zero lists everything.",
+        "operationId": "ItemService_ListItems",
+        "responses": {
+          "200": {
+            "description": "A successful response.(streaming responses)",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "$ref": "#/definitions/v1ListItemsResponse"
+                },
+                "error": {
+                  "$ref": "#/definitions/rpcStatus"
+                }
+              },
+              "title": "Stream result of v1ListItemsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "sinceVersion",
+            "description": "SinceVersion is the greatest version the client already has; zero lists\neverything.",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "ItemService"
+        ],
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "CreateItem stores a new item",
+        "description": "The client chooses the ID, so that an item created offline keeps it after\nthe sync; if the ID is empty, the server generates one. Fails with\nALREADY_EXISTS if the user already has an item with this ID, deleted ones\nincluded.",
+        "operationId": "ItemService_CreateItem",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1CreateItemResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "CreateItemRequest is a new item.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1CreateItemRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ItemService"
+        ],
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/items/{id}": {
+      "get": {
+        "summary": "GetItem returns one item",
+        "description": "Fails with NOT_FOUND if there is no such item or it has been deleted.",
+        "operationId": "ItemService_GetItem",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1GetItemResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "ID is the ID of the item.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "ItemService"
+        ],
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "DeleteItem deletes an item",
+        "description": "The item turns into a tombstone without data, so that other clients learn\nabout the deletion on their next sync. Like UpdateItem, it needs the\ncurrent version and fails with ABORTED otherwise.",
+        "operationId": "ItemService_DeleteItem",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeleteItemResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "ID is the ID of the item.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "description": "Version is the version the client wants to delete: it must still be the\ncurrent one.",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "ItemService"
+        ],
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "UpdateItem replaces the data of an item",
+        "description": "The version in the request must be the current version of the item:\notherwise another client has changed it in the meantime, and the call\nfails with ABORTED. Fails with NOT_FOUND if there is no such item or it\nhas been deleted.",
+        "operationId": "ItemService_UpdateItem",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1UpdateItemResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "ID is the ID of the item.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/ItemServiceUpdateItemBody"
+            }
+          }
+        ],
+        "tags": [
+          "ItemService"
+        ],
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "ItemServiceUpdateItemBody": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string",
+          "format": "byte",
+          "description": "Data is the new encrypted secret, not empty."
+        },
+        "version": {
+          "type": "string",
+          "format": "int64",
+          "description": "Version is the version the client has changed: it must still be the\ncurrent one."
+        }
+      },
+      "description": "UpdateItemRequest is new data for an item."
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "v1CreateItemRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID is a UUID for the item. If empty, the server generates one."
+        },
+        "type": {
+          "$ref": "#/definitions/v1ItemType",
+          "description": "Type is the kind of the secret."
+        },
+        "data": {
+          "type": "string",
+          "format": "byte",
+          "description": "Data is the encrypted secret, not empty."
+        }
+      },
+      "description": "CreateItemRequest is a new item."
+    },
+    "v1CreateItemResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID is the ID of the item."
+        },
+        "version": {
+          "type": "string",
+          "format": "int64",
+          "description": "Version is the version of the item."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UpdatedAt is when the item was stored."
+        }
+      },
+      "description": "CreateItemResponse tells how the server stored the new item."
+    },
+    "v1DeleteItemResponse": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "format": "int64",
+          "description": "Version is the version of the tombstone."
+        }
+      },
+      "description": "DeleteItemResponse tells the version of the tombstone."
+    },
+    "v1GetItemResponse": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/v1Item",
+          "description": "Item is the requested item."
+        }
+      },
+      "description": "GetItemResponse holds the item."
+    },
+    "v1Item": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID is a UUID; the client that created the item has chosen it."
+        },
+        "type": {
+          "$ref": "#/definitions/v1ItemType",
+          "description": "Type is the kind of the secret."
+        },
+        "data": {
+          "type": "string",
+          "format": "byte",
+          "description": "Data is the secret encrypted on the client, together with its name and\nmetadata. Empty for a deleted item."
+        },
+        "version": {
+          "type": "string",
+          "format": "int64",
+          "description": "Version is a number that grows with every change of any item of the\nuser. It orders the changes for sync and guards updates."
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Deleted marks a tombstone: the item has been deleted, and the clients\nshould delete their copies."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UpdatedAt is when the server stored the latest change."
+        }
+      },
+      "description": "Item is a secret of a user as the server keeps it."
+    },
+    "v1ItemType": {
+      "type": "string",
+      "enum": [
+        "ITEM_TYPE_UNSPECIFIED",
+        "ITEM_TYPE_CREDENTIALS",
+        "ITEM_TYPE_TEXT",
+        "ITEM_TYPE_BINARY",
+        "ITEM_TYPE_CARD",
+        "ITEM_TYPE_OTP"
+      ],
+      "default": "ITEM_TYPE_UNSPECIFIED",
+      "description": "ItemType is the kind of secret an item holds. It is the only thing about\nthe content the server knows.\n\n - ITEM_TYPE_UNSPECIFIED: The type is not set; the server rejects such items.\n - ITEM_TYPE_CREDENTIALS: A login and password pair.\n - ITEM_TYPE_TEXT: Arbitrary text.\n - ITEM_TYPE_BINARY: Arbitrary binary data, such as a file.\n - ITEM_TYPE_CARD: Bank card details.\n - ITEM_TYPE_OTP: A generator of time-based one-time passwords (TOTP)."
+    },
+    "v1ListItemsResponse": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/v1Item",
+          "description": "Item is a changed item or a tombstone."
+        }
+      },
+      "description": "ListItemsResponse is one changed item of the stream."
+    },
+    "v1LoginRequest": {
+      "type": "object",
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "Login is the login the account was registered with."
+        },
+        "password": {
+          "type": "string",
+          "description": "Password is the password of the account."
+        }
+      },
+      "description": "LoginRequest holds the credentials of an existing account."
+    },
+    "v1LoginResponse": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Token authenticates the other calls."
+        }
+      },
+      "description": "LoginResponse holds a fresh token."
+    },
+    "v1RegisterRequest": {
+      "type": "object",
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "Login is unique across the users, up to 256 bytes."
+        },
+        "password": {
+          "type": "string",
+          "description": "Password is up to 72 bytes. The official client does not send the master\npassword itself but a key derived from it, so the server never learns\nthe password the data is encrypted with."
+        }
+      },
+      "description": "RegisterRequest holds the credentials of a new account."
+    },
+    "v1RegisterResponse": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Token authenticates the other calls."
+        }
+      },
+      "description": "RegisterResponse holds the token of the new account."
+    },
+    "v1UpdateItemResponse": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "format": "int64",
+          "description": "Version is the new version of the item."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UpdatedAt is when the change was stored."
+        }
+      },
+      "description": "UpdateItemResponse tells the new version of the item."
+    }
+  },
+  "securityDefinitions": {
+    "Bearer": {
+      "type": "apiKey",
+      "description": "The token from register or login, as \"Bearer \u003ctoken\u003e\".",
+      "name": "Authorization",
+      "in": "header"
+    }
+  }
+}

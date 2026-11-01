@@ -1,0 +1,36 @@
+# The server with PostgreSQL: `make docker-up` or `docker compose up --build`.
+# gRPC listens on localhost:3200, the REST gateway and Swagger UI on
+# http://localhost:3201/docs. Set AUTH_KEY in the environment for anything
+# but a try-out.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gophkeeper
+      POSTGRES_PASSWORD: gophkeeper
+      POSTGRES_DB: gophkeeper
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gophkeeper -d gophkeeper"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  server:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GRPC_ADDRESS: ":3200"
+      HTTP_ADDRESS: ":3201"
+      DATABASE_DSN: "postgres://gophkeeper:gophkeeper@postgres:5432/gophkeeper?sslmode=disable"
+      AUTH_KEY: "${AUTH_KEY:-change-me}"
+    ports:
+      - "3200:3200"
+      - "3201:3201"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
