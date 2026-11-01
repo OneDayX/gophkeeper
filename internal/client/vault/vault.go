@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,7 +36,7 @@ type remoteStore interface {
 	CreateItem(ctx context.Context, item models.Item) (models.Item, error)
 	UpdateItem(ctx context.Context, item models.Item) (models.Item, error)
 	DeleteItem(ctx context.Context, id string, version int64) (int64, error)
-	ListItems(ctx context.Context, since int64, fn func(models.Item) error) error
+	ListItems(ctx context.Context, since int64) iter.Seq2[models.Item, error]
 }
 
 // Entry is a decrypted item: the secret together with what the vault knows
@@ -70,9 +71,10 @@ type SyncResult struct {
 const maxSyncRounds = 3
 
 // Vault is the secrets of one user on the device. It is safe for concurrent
-// use: the operations take turns, so a sync never overwrites a change made
-// while it waits for the server.
+// use. Local operations take turns, but never wait for network calls; syncs
+// run one at a time and do not overwrite a change made while they wait.
 type Vault struct {
+	syncMu sync.Mutex
 	mu     sync.Mutex
 	local  localStore
 	remote remoteStore
@@ -187,37 +189,51 @@ func (v *Vault) Get(id string) (Entry, error) {
 	return entryOf(item, s), nil
 }
 
-// List returns all entries, sorted by name.
-func (v *Vault) List() ([]Entry, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+// List returns live entries lazily, ordered by ID. It decrypts one entry at a
+// time and stops as soon as the consumer stops. An error is yielded once.
+func (v *Vault) List() iter.Seq2[Entry, error] {
+	return func(yield func(Entry, error) bool) {
+		v.mu.Lock()
+		defer v.mu.Unlock()
 
-	items, err := v.local.List()
-	if err != nil {
-		return nil, err
-	}
-
-	entries := make([]Entry, 0, len(items))
-	for _, item := range items {
-		if item.Deleted {
-			continue
+		items, err := v.local.List()
+		if err != nil {
+			yield(Entry{}, err)
+			return
 		}
+		for _, item := range items {
+			if item.Deleted {
+				continue
+			}
+			s, err := v.unseal(item)
+			if err != nil {
+				yield(Entry{}, err)
+				return
+			}
+			if !yield(entryOf(item, s), nil) {
+				return
+			}
+		}
+	}
+}
 
-		s, err := v.unseal(item)
+// Collect gathers a sequence of entries and sorts them by name for display.
+func Collect(entries iter.Seq2[Entry, error]) ([]Entry, error) {
+	var collected []Entry
+	for entry, err := range entries {
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, entryOf(item, s))
+		collected = append(collected, entry)
 	}
 
-	slices.SortFunc(entries, func(a, b Entry) int {
+	slices.SortFunc(collected, func(a, b Entry) int {
 		return cmp.Or(
 			cmp.Compare(strings.ToLower(a.Secret.Name), strings.ToLower(b.Secret.Name)),
 			cmp.Compare(a.ID, b.ID),
 		)
 	})
-
-	return entries, nil
+	return collected, nil
 }
 
 // Find returns the entry the reference points at: its ID, the beginning of
@@ -229,13 +245,11 @@ func (v *Vault) Find(ref string) (Entry, error) {
 		return Entry{}, fmt.Errorf("%w: empty reference", models.ErrNotFound)
 	}
 
-	entries, err := v.List()
-	if err != nil {
-		return Entry{}, err
-	}
-
 	var matches []Entry
-	for _, e := range entries {
+	for e, err := range v.List() {
+		if err != nil {
+			return Entry{}, err
+		}
 		if e.ID == ref {
 			return e, nil
 		}

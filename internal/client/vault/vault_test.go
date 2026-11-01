@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"iter"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,8 +26,9 @@ const userID = 1
 type fakeServer struct {
 	items   *service.ItemService
 	offline bool
-	// beforeUpdate, if set, runs before an update reaches the service, to
-	// let another device get there first.
+	// The hooks let tests make concurrent changes and pause a network call.
+	beforeList   func()
+	afterItem    func()
 	beforeUpdate func()
 }
 
@@ -76,21 +78,40 @@ func (s *fakeServer) DeleteItem(ctx context.Context, id string, version int64) (
 	return deleted, clientError(err)
 }
 
-func (s *fakeServer) ListItems(ctx context.Context, since int64, fn func(models.Item) error) error {
-	if s.offline {
-		return models.ErrUnavailable
-	}
+func (s *fakeServer) ListItems(ctx context.Context, since int64) iter.Seq2[models.Item, error] {
+	return func(yield func(models.Item, error) bool) {
+		if s.beforeList != nil {
+			hook := s.beforeList
+			s.beforeList = nil
+			hook()
+		}
+		if s.offline {
+			yield(models.Item{}, models.ErrUnavailable)
+			return
+		}
 
-	return s.items.List(ctx, userID, since, func(item smodels.Item) error {
-		return fn(models.Item{
-			ID:        item.ID,
-			Type:      models.ItemType(item.Type),
-			Data:      item.Data,
-			Version:   item.Version,
-			Deleted:   item.Deleted,
-			UpdatedAt: item.UpdatedAt,
-		})
-	})
+		for item, err := range s.items.List(ctx, userID, since) {
+			if err != nil {
+				yield(models.Item{}, clientError(err))
+				return
+			}
+			if !yield(models.Item{
+				ID:        item.ID,
+				Type:      models.ItemType(item.Type),
+				Data:      item.Data,
+				Version:   item.Version,
+				Deleted:   item.Deleted,
+				UpdatedAt: item.UpdatedAt,
+			}, nil) {
+				return
+			}
+			if s.afterItem != nil {
+				hook := s.afterItem
+				s.afterItem = nil
+				hook()
+			}
+		}
+	}
 }
 
 // clientError turns a server error into what the remote client returns.
@@ -133,7 +154,7 @@ func mustSync(t *testing.T, v *Vault) SyncResult {
 func names(t *testing.T, v *Vault) []string {
 	t.Helper()
 
-	entries, err := v.List()
+	entries, err := Collect(v.List())
 	require.NoError(t, err)
 
 	var names []string
@@ -298,7 +319,7 @@ func TestSync_ConflictKeepsBothVersions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, models.Text{Content: "laptop edit"}, got.Secret.Payload)
 
-	entries, err := phone.List()
+	entries, err := Collect(phone.List())
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.True(t, strings.HasPrefix(entries[1].Secret.Name, "diary (conflict "))
@@ -374,6 +395,121 @@ func TestSync_RaceBetweenPullAndPush(t *testing.T) {
 	assert.Len(t, names(t, laptop), 2)
 }
 
+func TestSync_DoesNotBlockLocalOperations(t *testing.T) {
+	server := newFakeServer()
+	laptop := newDevice(t, server)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.beforeList = func() {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}
+
+	syncDone := make(chan error, 1)
+	go func() {
+		_, err := laptop.Sync(ctx)
+		syncDone <- err
+	}()
+	<-started
+
+	localDone := make(chan error, 1)
+	go func() {
+		_, err := laptop.Add(note("offline", "still editable"))
+		localDone <- err
+	}()
+	select {
+	case err := <-localDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("a local change waited for the network")
+	}
+
+	close(release)
+	require.NoError(t, <-syncDone)
+}
+
+func TestSync_AppliesPullBeforeStreamEnds(t *testing.T) {
+	server := newFakeServer()
+	laptop := newDevice(t, server)
+	phone := newDevice(t, server)
+
+	first, err := laptop.Add(note("first", "one"))
+	require.NoError(t, err)
+	mustSync(t, laptop)
+	second, err := laptop.Add(note("second", "two"))
+	require.NoError(t, err)
+	mustSync(t, laptop)
+
+	firstApplied := make(chan struct{})
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.afterItem = func() {
+		close(firstApplied)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}
+
+	type syncOutcome struct {
+		result SyncResult
+		err    error
+	}
+	syncDone := make(chan syncOutcome, 1)
+	go func() {
+		result, err := phone.Sync(ctx)
+		syncDone <- syncOutcome{result: result, err: err}
+	}()
+	<-firstApplied
+
+	_, err = phone.Get(first.ID)
+	require.NoError(t, err, "the first change is already local")
+	_, err = phone.Get(second.ID)
+	assert.ErrorIs(t, err, models.ErrNotFound, "the second change is still in the stream")
+
+	close(release)
+	outcome := <-syncDone
+	require.NoError(t, outcome.err)
+	assert.Equal(t, SyncResult{Pulled: 2}, outcome.result)
+}
+
+func TestSync_LocalChangeDuringPush(t *testing.T) {
+	server := newFakeServer()
+	laptop := newDevice(t, server)
+
+	diary, err := laptop.Add(note("diary", "v1"))
+	require.NoError(t, err)
+	mustSync(t, laptop)
+	_, err = laptop.Update(diary.ID, note("diary", "sent to server"))
+	require.NoError(t, err)
+
+	var updateErr error
+	server.beforeUpdate = func() {
+		_, updateErr = laptop.Update(diary.ID, note("diary", "newer local edit"))
+	}
+	assert.Equal(t, SyncResult{Pushed: 1}, mustSync(t, laptop))
+	require.NoError(t, updateErr)
+
+	got, err := laptop.Get(diary.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.Text{Content: "newer local edit"}, got.Secret.Payload)
+	assert.True(t, got.Pending)
+
+	mustSync(t, laptop)
+	phone := newDevice(t, server)
+	mustSync(t, phone)
+	got, err = phone.Get(diary.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.Text{Content: "newer local edit"}, got.Secret.Payload)
+}
+
 func TestSync_Offline(t *testing.T) {
 	server := newFakeServer()
 	laptop := newDevice(t, server)
@@ -430,6 +566,24 @@ func TestSync_PushErrors(t *testing.T) {
 	assert.ErrorIs(t, err, models.ErrUnavailable)
 }
 
+func TestVault_ListStopsBeforeNextItem(t *testing.T) {
+	v := newDevice(t, newFakeServer())
+
+	first := models.Item{ID: "00000000-0000-4000-8000-000000000001", Type: models.ItemTypeText}
+	require.NoError(t, v.seal(&first, note("first", "readable")))
+	require.NoError(t, v.local.Put(first))
+	broken := models.Item{ID: "00000000-0000-4000-8000-000000000002", Type: models.ItemTypeText, Data: []byte("broken")}
+	require.NoError(t, v.local.Put(broken))
+
+	calls := 0
+	for _, err := range v.List() {
+		require.NoError(t, err)
+		calls++
+		break
+	}
+	assert.Equal(t, 1, calls, "the broken second item is never decrypted")
+}
+
 func TestVault_WrongKey(t *testing.T) {
 	server := newFakeServer()
 	laptop := newDevice(t, server)
@@ -443,7 +597,7 @@ func TestVault_WrongKey(t *testing.T) {
 	intruder := New(store, server, bytes.Repeat([]byte{1}, 32))
 	mustSync(t, intruder)
 
-	_, err = intruder.List()
+	_, err = Collect(intruder.List())
 	assert.Error(t, err, "the data is of no use without the key")
 }
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/OneDayX/gophkeeper/internal/client/models"
 	"github.com/OneDayX/gophkeeper/internal/client/vault"
@@ -16,7 +17,7 @@ func (m Model) openDetail(e vault.Entry) (tea.Model, tea.Cmd) {
 	m.current = e
 	m.screen = screenDetail
 	m.reveal = false
-	m.now = m.clock()
+	m.now = time.Now()
 
 	if m.showsOTP() {
 		return m, tickCmd()

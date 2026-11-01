@@ -2,7 +2,7 @@ package repository
 
 import (
 	"context"
-	"errors"
+	"iter"
 	"os"
 	"sync"
 	"testing"
@@ -29,7 +29,7 @@ type itemRepo interface {
 	Update(ctx context.Context, userID int64, item models.Item) (models.Item, error)
 	Delete(ctx context.Context, userID int64, id string, version int64) (int64, error)
 	Get(ctx context.Context, userID int64, id string) (models.Item, error)
-	List(ctx context.Context, userID int64, since int64, fn func(models.Item) error) error
+	List(ctx context.Context, userID int64, since int64) iter.Seq2[models.Item, error]
 }
 
 // repos is a pair of repositories of one implementation.
@@ -82,10 +82,10 @@ func list(t *testing.T, r repos, userID, since int64) []models.Item {
 	t.Helper()
 
 	var items []models.Item
-	require.NoError(t, r.items.List(context.Background(), userID, since, func(item models.Item) error {
+	for item, err := range r.items.List(context.Background(), userID, since) {
+		require.NoError(t, err)
 		items = append(items, item)
-		return nil
-	}))
+	}
 
 	return items
 }
@@ -233,13 +233,12 @@ func TestItems_List(t *testing.T) {
 
 		assert.Empty(t, list(t, r, alice, 4))
 
-		stop := errors.New("stop")
 		calls := 0
-		err = r.items.List(ctx, alice, 0, func(models.Item) error {
+		for _, err := range r.items.List(ctx, alice, 0) {
+			require.NoError(t, err)
 			calls++
-			return stop
-		})
-		assert.ErrorIs(t, err, stop)
+			break
+		}
 		assert.Equal(t, 1, calls)
 	})
 }
@@ -284,8 +283,11 @@ func TestMemoryItemRepository_ListStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = r.List(ctx, 1, 0, func(models.Item) error { return nil })
-	assert.ErrorIs(t, err, context.Canceled)
+	var listErr error
+	for _, err := range r.List(ctx, 1, 0) {
+		listErr = err
+	}
+	assert.ErrorIs(t, listErr, context.Canceled)
 }
 
 func TestItemRepository_UnknownUser(t *testing.T) {

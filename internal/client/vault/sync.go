@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,8 +24,8 @@ import (
 // server refuses the push, and Sync goes round again, up to maxSyncRounds
 // times; what is left waits for the next sync.
 func (v *Vault) Sync(ctx context.Context) (SyncResult, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	v.syncMu.Lock()
+	defer v.syncMu.Unlock()
 
 	var result SyncResult
 	for range maxSyncRounds {
@@ -44,57 +45,57 @@ func (v *Vault) Sync(ctx context.Context) (SyncResult, error) {
 	return result, nil
 }
 
-// pull applies the changes the server has got since the last pull, and
-// moves the cursor past them.
+// pull applies the changes one at a time as they arrive and moves the cursor
+// with each item. Neither the stream nor its changes are buffered in memory.
 func (v *Vault) pull(ctx context.Context, result *SyncResult) error {
+	v.mu.Lock()
 	cursor, err := v.local.Cursor()
+	v.mu.Unlock()
 	if err != nil {
 		return err
 	}
 
-	var changes []models.Item
-	err = v.remote.ListItems(ctx, cursor, func(item models.Item) error {
-		changes = append(changes, item)
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("fetch changes: %w", err)
-	}
-
-	var (
-		put    []models.Item
-		remove []string
-	)
-	for _, remote := range changes {
-		cursor = max(cursor, remote.Version)
-
-		local, err := v.local.Get(remote.ID)
-		found := err == nil
-		if err != nil && !errors.Is(err, models.ErrNotFound) {
+	for remote, err := range v.remote.ListItems(ctx, cursor) {
+		if err != nil {
+			return fmt.Errorf("fetch changes: %w", err)
+		}
+		cursor, err = v.applyRemote(remote, cursor, result)
+		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
 
-		if found && local.Version == remote.Version {
-			// Either our own push coming back, or a local change based on
-			// this very version, which the push will send.
-			continue
-		}
-		if !found && remote.Deleted {
-			// A deletion of an item this device has never had.
-			continue
-		}
+// applyRemote applies one server item and its cursor in the same transaction.
+// The lock covers only this local work, not the network stream.
+func (v *Vault) applyRemote(remote models.Item, cursor int64, result *SyncResult) (int64, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 
+	cursor = max(cursor, remote.Version)
+	local, err := v.local.Get(remote.ID)
+	found := err == nil
+	if err != nil && !errors.Is(err, models.ErrNotFound) {
+		return cursor, err
+	}
+
+	var put []models.Item
+	var remove []string
+	switch {
+	case found && local.Version == remote.Version:
+		// Our own push, or a local change based on this very version.
+	case !found && remote.Deleted:
+		// A deletion of an item this device has never had.
+	default:
 		if found && local.Dirty && !local.Deleted {
-			// The item has changed on both sides: the local change becomes
-			// a copy, and the server version takes its place.
 			conflict, err := v.conflictCopy(local)
 			if err != nil {
-				return err
+				return cursor, err
 			}
 			put = append(put, conflict)
 			result.Conflicts++
 		}
-
 		if remote.Deleted {
 			remove = append(remove, remote.ID)
 		} else {
@@ -103,18 +104,16 @@ func (v *Vault) pull(ctx context.Context, result *SyncResult) error {
 		result.Pulled++
 	}
 
-	if len(changes) == 0 {
-		return nil
-	}
-
-	return v.local.Apply(put, remove, cursor)
+	return cursor, v.local.Apply(put, remove, cursor)
 }
 
 // push sends the local changes one by one. It reports raced if the server
 // has refused some of them because another device has got there first; the
 // next pull brings those versions.
 func (v *Vault) push(ctx context.Context, result *SyncResult) (raced bool, err error) {
+	v.mu.Lock()
 	items, err := v.local.List()
+	v.mu.Unlock()
 	if err != nil {
 		return false, err
 	}
@@ -142,7 +141,8 @@ func (v *Vault) push(ctx context.Context, result *SyncResult) (raced bool, err e
 // for: the item is turned into a new one for the next round.
 var errRecreate = errors.New("item is gone from the server, sending it again")
 
-// pushItem sends one local change and records that the server has it.
+// pushItem sends one local change and records that the server has it. The
+// remote call runs without the local lock.
 func (v *Vault) pushItem(ctx context.Context, item models.Item) error {
 	switch {
 	case item.Deleted:
@@ -150,7 +150,8 @@ func (v *Vault) pushItem(ctx context.Context, item models.Item) error {
 		if err != nil && !errors.Is(err, models.ErrNotFound) {
 			return err
 		}
-		// The item is gone from the server either way.
+		v.mu.Lock()
+		defer v.mu.Unlock()
 		return v.local.Delete(item.ID)
 
 	case item.Version == 0:
@@ -163,13 +164,7 @@ func (v *Vault) pushItem(ctx context.Context, item models.Item) error {
 	default:
 		updated, err := v.remote.UpdateItem(ctx, item)
 		if errors.Is(err, models.ErrNotFound) {
-			// Not even a tombstone is left: the server has lost the item.
-			// Without a version the next round creates it again.
-			item.Version = 0
-			if err := v.local.Put(item); err != nil {
-				return err
-			}
-			return errRecreate
+			return v.markForRecreate(item)
 		}
 		if err != nil {
 			return err
@@ -178,14 +173,69 @@ func (v *Vault) pushItem(ctx context.Context, item models.Item) error {
 	}
 }
 
-// markSynced records the version and time the server has given to a pushed
-// item.
+// markSynced records the answer to a push. If the user changed the item while
+// it was being sent, only its base version moves: the newer edit stays dirty.
 func (v *Vault) markSynced(item, stored models.Item) error {
-	item.Version = stored.Version
-	item.UpdatedAt = stored.UpdatedAt
-	item.Dirty = false
+	v.mu.Lock()
+	defer v.mu.Unlock()
 
-	return v.local.Put(item)
+	current, err := v.local.Get(item.ID)
+	if errors.Is(err, models.ErrNotFound) && item.Version == 0 {
+		// A new item was deleted locally while its create was in flight.
+		item.Version = stored.Version
+		item.UpdatedAt = stored.UpdatedAt
+		item.Deleted = true
+		item.Data = nil
+		return v.local.Put(item)
+	}
+	if errors.Is(err, models.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if sameItem(current, item) {
+		item.Version = stored.Version
+		item.UpdatedAt = stored.UpdatedAt
+		item.Dirty = false
+		return v.local.Put(item)
+	}
+
+	current.Version = stored.Version
+	current.Dirty = true
+	return v.local.Put(current)
+}
+
+// markForRecreate drops the server version of a missing item, preserving any
+// newer local edit. A deletion of an already missing item is simply finished.
+func (v *Vault) markForRecreate(item models.Item) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	current, err := v.local.Get(item.ID)
+	if errors.Is(err, models.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current.Deleted {
+		return v.local.Delete(current.ID)
+	}
+	current.Version = 0
+	current.Dirty = true
+	if err := v.local.Put(current); err != nil {
+		return err
+	}
+	return errRecreate
+}
+
+// sameItem reports whether the local item still equals the pushed snapshot.
+func sameItem(a, b models.Item) bool {
+	return a.ID == b.ID && a.Type == b.Type && a.Version == b.Version &&
+		a.Deleted == b.Deleted && a.Dirty == b.Dirty &&
+		a.UpdatedAt.Equal(b.UpdatedAt) && bytes.Equal(a.Data, b.Data)
 }
 
 // conflictCopy turns a local change that has lost to a change from another

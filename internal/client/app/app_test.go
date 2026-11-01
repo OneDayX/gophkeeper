@@ -9,6 +9,7 @@ import (
 
 	"github.com/OneDayX/gophkeeper/internal/client/models"
 	"github.com/OneDayX/gophkeeper/internal/client/storage"
+	"github.com/OneDayX/gophkeeper/internal/client/vault"
 	serverapp "github.com/OneDayX/gophkeeper/internal/server/app"
 	"github.com/OneDayX/gophkeeper/internal/server/config"
 	"github.com/stretchr/testify/assert"
@@ -92,7 +93,7 @@ func TestApp_TwoDevices(t *testing.T) {
 	_, err = pv.Sync(ctx)
 	require.NoError(t, err)
 
-	entries, err := pv.List()
+	entries, err := vault.Collect(pv.List())
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, models.Credentials{Login: "alice", Password: "s3cret"}, entries[0].Secret.Payload)
@@ -124,7 +125,7 @@ func TestApp_SessionSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	_, err = v.Sync(ctx)
 	require.NoError(t, err, "the saved token works")
-	entries, err := v.List()
+	entries, err := vault.Collect(v.List())
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
 
@@ -159,7 +160,7 @@ func TestApp_SwitchAccounts(t *testing.T) {
 	require.NoError(t, a.Register(ctx, "bob", "bob password"))
 	v, err = a.Vault()
 	require.NoError(t, err)
-	entries, err := v.List()
+	entries, err := vault.Collect(v.List())
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }

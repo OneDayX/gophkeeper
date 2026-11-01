@@ -70,10 +70,10 @@ func list(t *testing.T, c *Client, since int64) []models.Item {
 	t.Helper()
 
 	var items []models.Item
-	require.NoError(t, c.ListItems(context.Background(), since, func(item models.Item) error {
+	for item, err := range c.ListItems(context.Background(), since) {
+		require.NoError(t, err)
 		items = append(items, item)
-		return nil
-	}))
+	}
 
 	return items
 }
@@ -156,12 +156,15 @@ func TestItems(t *testing.T) {
 
 	assert.Empty(t, list(t, c, 3))
 
-	stop := errors.New("stop")
-	err = c.ListItems(ctx, 0, func(models.Item) error { return stop })
-	assert.ErrorIs(t, err, stop)
+	for range c.ListItems(ctx, 0) {
+		break
+	}
 
-	err = c.ListItems(ctx, -1, func(models.Item) error { return nil })
-	assert.ErrorIs(t, err, models.ErrRejected)
+	var listErr error
+	for _, err := range c.ListItems(ctx, -1) {
+		listErr = err
+	}
+	assert.ErrorIs(t, listErr, models.ErrRejected)
 }
 
 func TestUnavailable(t *testing.T) {
@@ -176,8 +179,11 @@ func TestUnavailable(t *testing.T) {
 	_, err = c.Login(context.Background(), "alice", "auth-key")
 	assert.ErrorIs(t, err, models.ErrUnavailable)
 
-	err = c.ListItems(context.Background(), 0, func(models.Item) error { return nil })
-	assert.ErrorIs(t, err, models.ErrUnavailable)
+	var listErr error
+	for _, err := range c.ListItems(context.Background(), 0) {
+		listErr = err
+	}
+	assert.ErrorIs(t, listErr, models.ErrUnavailable)
 }
 
 func TestTLS(t *testing.T) {

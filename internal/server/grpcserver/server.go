@@ -6,6 +6,7 @@ package grpcserver
 
 import (
 	"context"
+	"iter"
 
 	"github.com/OneDayX/gophkeeper/internal/pb"
 	"github.com/OneDayX/gophkeeper/internal/server/models"
@@ -27,7 +28,7 @@ type itemService interface {
 	Update(ctx context.Context, userID int64, item models.Item) (models.Item, error)
 	Delete(ctx context.Context, userID int64, id string, version int64) (int64, error)
 	Get(ctx context.Context, userID int64, id string) (models.Item, error)
-	List(ctx context.Context, userID int64, since int64, fn func(models.Item) error) error
+	List(ctx context.Context, userID int64, since int64) iter.Seq2[models.Item, error]
 }
 
 type tokenParser interface {

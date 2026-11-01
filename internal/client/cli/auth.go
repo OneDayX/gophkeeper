@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/OneDayX/gophkeeper/internal/client/app"
+	"github.com/OneDayX/gophkeeper/internal/client/vault"
 	"github.com/OneDayX/gophkeeper/internal/client/view"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -175,7 +176,7 @@ func (c *cli) statusCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				entries, err := v.List()
+				entries, err := vault.Collect(v.List())
 				if err != nil {
 					return err
 				}

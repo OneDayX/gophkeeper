@@ -58,7 +58,7 @@ func (c *cli) listCommand() *cobra.Command {
 			}
 
 			return c.withVault(func(v *vault.Vault) error {
-				entries, err := v.List()
+				entries, err := vault.Collect(v.List())
 				if err != nil {
 					return err
 				}

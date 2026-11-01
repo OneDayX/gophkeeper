@@ -180,7 +180,7 @@ func TestChangesBetweenDevices(t *testing.T) {
 	laptop.sync(t)
 
 	for _, d := range []*device{laptop, phone} {
-		entries, err := d.vault.List()
+		entries, err := vault.Collect(d.vault.List())
 		require.NoError(t, err)
 		require.Len(t, entries, 2)
 		assert.Equal(t, models.Text{Content: "laptop edit"}, entries[0].Secret.Payload)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"iter"
 
 	"github.com/OneDayX/gophkeeper/internal/server/models"
 	"github.com/google/uuid"
@@ -13,7 +14,7 @@ type itemStore interface {
 	Update(ctx context.Context, userID int64, item models.Item) (models.Item, error)
 	Delete(ctx context.Context, userID int64, id string, version int64) (int64, error)
 	Get(ctx context.Context, userID int64, id string) (models.Item, error)
-	List(ctx context.Context, userID int64, since int64, fn func(models.Item) error) error
+	List(ctx context.Context, userID int64, since int64) iter.Seq2[models.Item, error]
 }
 
 // ItemService keeps the encrypted items of the users. It checks what the
@@ -101,14 +102,17 @@ func (s *ItemService) Get(ctx context.Context, userID int64, id string) (models.
 	return s.items.Get(ctx, userID, id)
 }
 
-// List calls fn for every item of the user changed after the version since,
-// tombstones included, in the order of versions.
-func (s *ItemService) List(ctx context.Context, userID int64, since int64, fn func(models.Item) error) error {
+// List returns the items of the user changed after the version since,
+// tombstones included, in the order of versions. A negative version produces
+// a sequence with models.ErrInvalidItem.
+func (s *ItemService) List(ctx context.Context, userID int64, since int64) iter.Seq2[models.Item, error] {
 	if since < 0 {
-		return fmt.Errorf("%w: negative version %d", models.ErrInvalidItem, since)
+		return func(yield func(models.Item, error) bool) {
+			yield(models.Item{}, fmt.Errorf("%w: negative version %d", models.ErrInvalidItem, since))
+		}
 	}
 
-	return s.items.List(ctx, userID, since, fn)
+	return s.items.List(ctx, userID, since)
 }
 
 // normalizeID checks that id is a UUID and returns its canonical form, so

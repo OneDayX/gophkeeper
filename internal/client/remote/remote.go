@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"os"
 	"strings"
@@ -219,30 +220,32 @@ func (c *Client) DeleteItem(ctx context.Context, id string, version int64) (int6
 	return resp.GetVersion(), nil
 }
 
-// ListItems calls fn for every item changed on the server after the version
-// since, in the order of versions. Deleted items come as tombstones with
-// Deleted set. It stops at the first error of fn and returns it.
-func (c *Client) ListItems(ctx context.Context, since int64, fn func(models.Item) error) error {
-	// Cancelling the call releases the stream if fn stops early.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+// ListItems returns the items changed on the server after the version since,
+// in the order of versions. Deleted items come as tombstones with Deleted set.
+// Stopping the sequence early cancels the stream. An error is yielded once.
+func (c *Client) ListItems(ctx context.Context, since int64) iter.Seq2[models.Item, error] {
+	return func(yield func(models.Item, error) bool) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-	stream, err := c.items.ListItems(c.withToken(ctx), &pb.ListItemsRequest{SinceVersion: since})
-	if err != nil {
-		return convertError(err)
-	}
-
-	for {
-		resp, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
+		stream, err := c.items.ListItems(c.withToken(ctx), &pb.ListItemsRequest{SinceVersion: since})
 		if err != nil {
-			return convertError(err)
+			yield(models.Item{}, convertError(err))
+			return
 		}
 
-		if err := fn(itemFromProto(resp.GetItem())); err != nil {
-			return err
+		for {
+			resp, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				yield(models.Item{}, convertError(err))
+				return
+			}
+			if !yield(itemFromProto(resp.GetItem()), nil) {
+				return
+			}
 		}
 	}
 }

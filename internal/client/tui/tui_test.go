@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/OneDayX/gophkeeper/internal/client/app"
@@ -64,10 +66,18 @@ type fakeVault struct {
 	lastID  int
 }
 
-func (v *fakeVault) List() ([]vault.Entry, error) {
+func (v *fakeVault) List() iter.Seq2[vault.Entry, error] {
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	return slices.Clone(v.entries), nil
+	entries := slices.Clone(v.entries)
+	v.mu.Unlock()
+
+	return func(yield func(vault.Entry, error) bool) {
+		for _, entry := range entries {
+			if !yield(entry, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (v *fakeVault) Add(s models.Secret) (vault.Entry, error) {
@@ -316,7 +326,7 @@ func TestStart_LoggedIn(t *testing.T) {
 func TestDetail(t *testing.T) {
 	m := started(t, sampleVault())
 
-	m = press(t, m, "enter")
+	m = press(t, m, "down", "enter")
 	require.Equal(t, screenDetail, m.screen)
 	assert.Equal(t, "GitHub", m.current.Secret.Name)
 	view := m.View()
@@ -331,31 +341,33 @@ func TestDetail(t *testing.T) {
 	assert.Equal(t, screenList, m.screen)
 	assert.False(t, m.reveal, "revealing does not stick")
 
-	// The second entry is the card.
-	m = press(t, m, "down", "enter")
+	// The last entry is the card.
+	m = press(t, m, "down", "down", "enter")
 	assert.Contains(t, m.View(), "**** 1111")
 	assert.Contains(t, m.help(), "r reveal")
 	assert.NotContains(t, m.help(), "save file")
 }
 
 func TestDetail_OTPTicks(t *testing.T) {
-	m := started(t, sampleVault())
-	m.clock = func() time.Time { return time.Unix(59, 0) }
+	synctest.Test(t, func(t *testing.T) {
+		m := started(t, sampleVault())
+		next, cmd := m.Update(key("enter"))
+		m = next.(Model)
+		require.NotNil(t, cmd, "an OTP entry starts the clock")
+		assert.Contains(t, m.View(), "valid for 30s")
 
-	m = press(t, m, "down", "down")
-	next, cmd := m.Update(key("enter"))
-	m = next.(Model)
-	require.NotNil(t, cmd, "an OTP entry starts the clock")
-	assert.Contains(t, m.View(), "287 082")
+		ticked := make(chan tea.Msg, 1)
+		go func() { ticked <- cmd() }()
+		time.Sleep(time.Second)
+		next, cmd = m.Update(<-ticked)
+		m = next.(Model)
+		assert.NotNil(t, cmd, "the clock goes on")
+		assert.Contains(t, m.View(), "valid for 29s")
 
-	next, cmd = m.Update(tickMsg(time.Unix(61, 0)))
-	m = next.(Model)
-	assert.NotNil(t, cmd, "the clock goes on")
-	assert.NotContains(t, m.View(), "287 082", "a new period, a new code")
-
-	m = press(t, m, "esc")
-	_, cmd = m.Update(tickMsg(time.Unix(62, 0)))
-	assert.Nil(t, cmd, "the clock stops off the OTP entry")
+		m = press(t, m, "esc")
+		_, cmd = m.Update(tickMsg(time.Now()))
+		assert.Nil(t, cmd, "the clock stops off the OTP entry")
+	})
 }
 
 func TestAdd(t *testing.T) {
@@ -437,7 +449,7 @@ func TestEdit(t *testing.T) {
 	m := started(t, v)
 
 	// From the list: rename GitHub.
-	m = press(t, m, "e")
+	m = press(t, m, "down", "e")
 	require.Equal(t, screenForm, m.screen)
 	assert.Contains(t, m.View(), "Edit GitHub")
 	assert.Equal(t, "alice", m.form.value("login"), "the form is filled in")
@@ -453,7 +465,7 @@ func TestEdit(t *testing.T) {
 
 	// The OTP settings the form does not show are kept. The fields are the
 	// name, the secret, the issuer, the account and the metadata.
-	m = press(t, m, "esc", "down", "down", "enter", "e", "tab", "tab", "GitHub", "ctrl+s")
+	m = press(t, m, "esc", "up", "enter", "e", "tab", "tab", "GitHub", "ctrl+s")
 	require.Equal(t, screenDetail, m.screen, m.status)
 	generator := v.entries[2].Secret.Payload.(models.OTP)
 	assert.Equal(t, "GitHub", generator.Issuer)
@@ -479,7 +491,7 @@ func TestDelete(t *testing.T) {
 	v := sampleVault()
 	m := started(t, v)
 
-	m = press(t, m, "d")
+	m = press(t, m, "down", "d")
 	assert.Contains(t, m.View(), `Delete "GitHub" on all devices?`)
 	assert.Contains(t, m.help(), "y delete")
 	m = press(t, m, "n")

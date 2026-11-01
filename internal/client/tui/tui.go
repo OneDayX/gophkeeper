@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"time"
 
 	"github.com/OneDayX/gophkeeper/internal/client/app"
@@ -41,8 +42,8 @@ type Backend interface {
 
 // Vault is what the TUI needs from the vault; vault.Vault provides it.
 type Vault interface {
-	// List returns all entries, sorted by name.
-	List() ([]vault.Entry, error)
+	// List returns entries lazily.
+	List() iter.Seq2[vault.Entry, error]
 	// Add stores a new secret.
 	Add(s models.Secret) (vault.Entry, error)
 	// Update replaces the secret of an entry.
@@ -116,8 +117,7 @@ type Model struct {
 	// reveal shows the secrets of current.
 	reveal bool
 	// now is the time the OTP codes are shown for; ticks move it on.
-	now   time.Time
-	clock func() time.Time
+	now time.Time
 
 	// form is the form of the entry being added or edited.
 	form *entryForm
@@ -140,10 +140,9 @@ func New(backend Backend) Model {
 	m := Model{
 		backend: backend,
 		list:    newList(),
-		clock:   time.Now,
 		login:   newLoginForm(),
 	}
-	m.now = m.clock()
+	m.now = time.Now()
 
 	if backend.LoggedIn() {
 		v, err := backend.Vault()

@@ -69,7 +69,7 @@ func authCmd(backend Backend, login, password string, register bool) tea.Cmd {
 // loadCmd reads the entries.
 func loadCmd(v Vault) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := v.List()
+		entries, err := vault.Collect(v.List())
 		return entriesMsg{entries: entries, err: err}
 	}
 }

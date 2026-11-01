@@ -116,11 +116,13 @@ func (s *ItemServer) ListItems(req *pb.ListItemsRequest, stream grpc.ServerStrea
 		return err
 	}
 
-	err = s.items.List(ctx, userID, req.GetSinceVersion(), func(item models.Item) error {
-		return stream.Send(&pb.ListItemsResponse{Item: itemToProto(item)})
-	})
-	if err != nil {
-		return statusFromError(s.log, err)
+	for item, err := range s.items.List(ctx, userID, req.GetSinceVersion()) {
+		if err != nil {
+			return statusFromError(s.log, err)
+		}
+		if err := stream.Send(&pb.ListItemsResponse{Item: itemToProto(item)}); err != nil {
+			return statusFromError(s.log, err)
+		}
 	}
 
 	return nil

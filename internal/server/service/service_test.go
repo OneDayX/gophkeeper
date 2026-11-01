@@ -108,10 +108,10 @@ func TestItemService(t *testing.T) {
 	assert.Equal(t, int64(3), version)
 
 	var listed []models.Item
-	require.NoError(t, svc.List(ctx, 1, 0, func(item models.Item) error {
+	for item, err := range svc.List(ctx, 1, 0) {
+		require.NoError(t, err)
 		listed = append(listed, item)
-		return nil
-	}))
+	}
 	require.Len(t, listed, 1)
 	assert.True(t, listed[0].Deleted)
 }
@@ -142,7 +142,10 @@ func TestItemService_InvalidRequests(t *testing.T) {
 	_, cases["delete with a bad ID"] = svc.Delete(ctx, 1, "x", 1)
 	_, cases["delete without a version"] = svc.Delete(ctx, 1, itemID, 0)
 	_, cases["get with a bad ID"] = svc.Get(ctx, 1, "x")
-	cases["list with a negative version"] = svc.List(ctx, 1, -1, func(models.Item) error { return nil })
+	cases["list with a negative version"] = nil
+	for _, err := range svc.List(ctx, 1, -1) {
+		cases["list with a negative version"] = err
+	}
 
 	for name, err := range cases {
 		assert.ErrorIs(t, err, models.ErrInvalidItem, name)

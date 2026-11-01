@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 
 	"github.com/OneDayX/gophkeeper/internal/server/models"
 	"github.com/jackc/pgx/v5"
@@ -140,35 +141,36 @@ func (r *ItemRepository) Get(ctx context.Context, userID int64, id string) (mode
 	return item, nil
 }
 
-// List calls fn for every item of the user with a version greater than
-// since, tombstones included, in the order of versions. It stops at the
-// first error of fn and returns it.
-func (r *ItemRepository) List(ctx context.Context, userID int64, since int64, fn func(models.Item) error) error {
-	rows, err := r.pool.Query(ctx,
-		`SELECT `+itemColumns+` FROM items WHERE user_id = $1 AND version > $2 ORDER BY version`,
-		userID, since,
-	)
-	if err != nil {
-		return fmt.Errorf("list items: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		item, err := scanItem(rows)
+// List returns the items of the user with a version greater than since,
+// tombstones included, in the order of versions. Rows are read lazily and are
+// closed when the consumer stops the sequence. An error is yielded once.
+func (r *ItemRepository) List(ctx context.Context, userID int64, since int64) iter.Seq2[models.Item, error] {
+	return func(yield func(models.Item, error) bool) {
+		rows, err := r.pool.Query(ctx,
+			`SELECT `+itemColumns+` FROM items WHERE user_id = $1 AND version > $2 ORDER BY version`,
+			userID, since,
+		)
 		if err != nil {
-			return fmt.Errorf("scan item: %w", err)
+			yield(models.Item{}, fmt.Errorf("list items: %w", err))
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			item, err := scanItem(rows)
+			if err != nil {
+				yield(models.Item{}, fmt.Errorf("scan item: %w", err))
+				return
+			}
+			if !yield(item, nil) {
+				return
+			}
 		}
 
-		if err := fn(item); err != nil {
-			return err
+		if err := rows.Err(); err != nil {
+			yield(models.Item{}, fmt.Errorf("list items: %w", err))
 		}
 	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("list items: %w", err)
-	}
-
-	return nil
 }
 
 // nextVersion bumps the revision of the user and returns it as the version

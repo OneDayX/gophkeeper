@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"iter"
 	"slices"
 	"sync"
 	"time"
@@ -160,12 +161,10 @@ func (r *MemoryItemRepository) Get(_ context.Context, userID int64, id string) (
 	return item, nil
 }
 
-// List calls fn for every item of the user with a version greater than
-// since, tombstones included, in the order of versions. It stops at the
-// first error of fn and returns it.
-func (r *MemoryItemRepository) List(ctx context.Context, userID int64, since int64, fn func(models.Item) error) error {
-	// The items are copied out, so that fn runs without the lock: it may be
-	// slow, sending the items over the network.
+// List returns the items of the user with a version greater than since,
+// tombstones included, in the order of versions. The items are copied before
+// iteration, so consumers can yield without holding the repository lock.
+func (r *MemoryItemRepository) List(ctx context.Context, userID int64, since int64) iter.Seq2[models.Item, error] {
 	r.mu.Lock()
 	var changed []models.Item
 	for _, item := range r.items[userID] {
@@ -180,16 +179,17 @@ func (r *MemoryItemRepository) List(ctx context.Context, userID int64, since int
 		return cmp.Compare(a.Version, b.Version)
 	})
 
-	for _, item := range changed {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := fn(item); err != nil {
-			return err
+	return func(yield func(models.Item, error) bool) {
+		for _, item := range changed {
+			if err := ctx.Err(); err != nil {
+				yield(models.Item{}, err)
+				return
+			}
+			if !yield(item, nil) {
+				return
+			}
 		}
 	}
-
-	return nil
 }
 
 // nextVersion bumps the revision of the user and returns it. The caller
